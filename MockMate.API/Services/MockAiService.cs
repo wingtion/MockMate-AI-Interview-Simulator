@@ -25,9 +25,5 @@ namespace MockMate.API.Services
             });
         }
 
-        public Task<string> GenerateProblemAsync(string topic, string difficulty)
-        {
-            throw new NotImplementedException();
-        }
     }
 }

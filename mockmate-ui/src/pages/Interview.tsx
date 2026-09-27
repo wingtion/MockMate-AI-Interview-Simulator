@@ -1,13 +1,41 @@
-﻿/* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useState, useEffect, useRef, useId } from 'react';
+import { Link, useParams, useNavigate, useLocation } from 'react-router-dom';
 import * as signalR from '@microsoft/signalr';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
+import {
+    ArrowClockwise,
+    ArrowCounterClockwise,
+    ArrowLeft,
+    ArrowRight,
+    ChartLineUp,
+    ChatCircle,
+    CheckCircle,
+    Copy,
+    House,
+    Lightbulb,
+    Lock,
+    Microphone,
+    MicrophoneSlash,
+    NotePencil,
+    PaperPlaneRight,
+    Play,
+    SpeakerSlash,
+    Square,
+    Stop,
+    WarningCircle,
+    X,
+} from '@phosphor-icons/react';
 import AudioVisualizer from '../components/AudioVisualizer';
+import Modal from '../components/Modal';
+import OutputConsole from '../components/OutputConsole';
 import { useToast } from '../components/Toast';
 import { saveRecord } from '../lib/history';
-import { defineMockmateTheme } from '../lib/editorTheme';
+import { defineMockmateTheme, EDITOR_OPTIONS } from '../lib/editorTheme';
+import { SERVER_UNREACHABLE } from '../lib/api';
+import { runProgram } from '../lib/engine';
+import { engineFor } from '../lib/practice';
 import {
     ARENAS,
     LANGUAGES,
@@ -31,11 +59,22 @@ interface InterviewFeedback {
     feedbackPoints: string[];
 }
 
+type ReportState = 'idle' | 'loading' | 'done' | 'error';
+
 const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
 };
+
+const scoreClass = (v: number) => (v >= 7 ? 'good' : v >= 4 ? 'mid' : 'bad');
+
+// The grader contract is 1-10 for both scores. Anything else (including the
+// 0/0 the backend used to return on a Groq failure) is treated as a failed report.
+const isValidReport = (r: any): r is InterviewFeedback =>
+    !!r &&
+    Number.isFinite(r.codingScore) && r.codingScore >= 1 && r.codingScore <= 10 &&
+    Number.isFinite(r.communicationScore) && r.communicationScore >= 1 && r.communicationScore <= 10;
 
 // The Web Speech API (mic) is unavailable on iOS Safari (so all iPhone/iPad browsers)
 // and some mobile browsers. When it's missing we hide the mic UI and steer the user
@@ -49,11 +88,14 @@ function Interview() {
     const navigate = useNavigate();
     const location = useLocation();
     const showToast = useToast();
+    const modeSelectId = useId();
+    const langSelectId = useId();
 
     // --- STATE ---
     const [connection, setConnection] = useState<signalR.HubConnection | null>(null);
     const [messages, setMessages] = useState<any[]>([]);
     const [isConnected, setIsConnected] = useState(false);
+    const [isStarting, setIsStarting] = useState(false);
     const [isListening, setIsListening] = useState(false);
     const [code, setCode] = useState<string>("// The interviewer will give you a problem. Write your solution here…\n");
     const [mode, setMode] = useState<string>(modeParam || "Standard");
@@ -63,22 +105,27 @@ function Interview() {
     const [elapsed, setElapsed] = useState(0); // session seconds
     const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pendingUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-    const chatEndRef = useRef<HTMLDivElement>(null);
+    const chatLogRef = useRef<HTMLDivElement>(null);
     const resumeText = location.state?.resumeText || "";
 
-    // Execution State
+    // Execution state (engine picked per language, see lib/engine.ts)
     const [output, setOutput] = useState<string>("");
+    const [outputIsError, setOutputIsError] = useState(false);
     const [isRunning, setIsRunning] = useState(false);
+    const [runStatus, setRunStatus] = useState<string | null>(null); // "Loading Python…"
     const [consoleOpen, setConsoleOpen] = useState(true);
 
     // Feedback State
     const [feedback, setFeedback] = useState<InterviewFeedback | null>(null);
-    const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
+    const [reportState, setReportState] = useState<ReportState>('idle');
 
     const [chatInput, setChatInput] = useState("");
     const [previewText, setPreviewText] = useState("");
 
     const codeRef = useRef<string>(code);
+    const editorRef = useRef<any>(null);
+    // Read from the live editor: React state can lag a keystroke behind a fast Ctrl+Enter.
+    const currentCode = (): string => editorRef.current?.getValue() ?? codeRef.current;
     const recognitionRef = useRef<any>(null);
     const runCodeRef = useRef<() => void>(() => {});
 
@@ -107,10 +154,13 @@ function Interview() {
 
     // Auto-scroll the chat to the newest message / typing indicator
     useEffect(() => {
-        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        // Scroll only the transcript itself; scrollIntoView would also scroll the
+        // page and pull the editor out of view on phones.
+        const log = chatLogRef.current;
+        if (log) log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
     }, [messages, isAiThinking]);
 
-    // Session timer — runs while connected
+    // Session timer: runs while connected
     useEffect(() => {
         if (!isConnected) return;
         setElapsed(0);
@@ -130,7 +180,7 @@ function Interview() {
         const cleanText = cleanTextForSpeech(text);
         const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.lang = 'en-US';
-        pendingUtteranceRef.current = utterance; 
+        pendingUtteranceRef.current = utterance;
 
         utterance.onstart = () => {
             if (!isSessionActive.current || pendingUtteranceRef.current !== utterance) {
@@ -180,7 +230,7 @@ function Interview() {
         if (!recognitionRef.current) return;
 
         if (isListening) {
-            // User is done thinking/talking — finalize & send (handled in onend)
+            // User is done thinking/talking: finalize & send (handled in onend)
             manualStopRef.current = true;
             try { recognitionRef.current.stop(); } catch { /* already stopped */ }
         } else {
@@ -204,18 +254,20 @@ function Interview() {
             try {
                 await connection.invoke("ProcessUserAudio", {
                     text: text,
-                    currentCode: codeRef.current,
+                    currentCode: currentCode(),
                     mode: mode
                 });
             } catch (error) {
                 console.error("Error sending data:", error);
                 setIsAiThinking(false);
+                showToast("Your answer didn't reach the interviewer. Check your connection and send it again.", 'error');
             }
         }
     };
 
-    const handleSendText = () => {
-        if (!chatInput.trim()) return; 
+    const handleSendText = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!chatInput.trim()) return;
 
         sendToBackend(chatInput);
 
@@ -223,6 +275,8 @@ function Interview() {
     };
 
     const startInterview = async () => {
+        if (isStarting) return;
+        setIsStarting(true);
         try {
             isSessionActive.current = true;
 
@@ -244,7 +298,15 @@ function Interview() {
                 speakText(response.message);
             });
 
+            newConnection.onclose(() => {
+                if (isSessionActive.current) {
+                    setIsAiThinking(false);
+                    showToast("Lost the connection to the interviewer. End the session and start a new one.", 'error');
+                }
+            });
+
             await newConnection.start();
+            setMessages([]);
             setConnection(newConnection);
             setIsConnected(true);
 
@@ -258,15 +320,42 @@ function Interview() {
 
                 await newConnection.invoke("ProcessUserAudio", {
                     text: initialMessage,
-                    currentCode: codeRef.current,
+                    currentCode: currentCode(),
                     mode: mode
                 });
             }
 
         } catch (error) {
             console.error(error);
-            showToast('Backend not running! Check the .NET console.', 'error');
+            showToast(SERVER_UNREACHABLE, 'error');
             isSessionActive.current = false;
+        } finally {
+            setIsStarting(false);
+        }
+    };
+
+    // Ask the hub for the scored report. On failure the connection (and the
+    // server-side transcript) is kept alive so the user can retry.
+    const requestReport = async (conn: signalR.HubConnection) => {
+        setReportState('loading');
+        try {
+            const report = await conn.invoke<InterviewFeedback>("EndSession");
+            if (!isValidReport(report)) throw new Error("Report came back without valid scores");
+            const points = report.feedbackPoints ?? [];
+            setFeedback({ ...report, feedbackPoints: points });
+            saveRecord({
+                kind: 'interview',
+                mode,
+                language,
+                codingScore: report.codingScore,
+                communicationScore: report.communicationScore,
+                feedbackPoints: points,
+            });
+            setReportState('done');
+            conn.stop();
+        } catch (e) {
+            console.error("Error getting feedback:", e);
+            setReportState('error');
         }
     };
 
@@ -287,29 +376,29 @@ function Interview() {
         setTimeout(() => clearInterval(watchdog), 1000);
 
         setIsConnected(false);
-        setIsLoadingFeedback(true);
 
         if (connection) {
             connection.off("ReceiveAiResponse");
             connection.off("ReceiveSystemStatus");
-
-            try {
-                const report = await connection.invoke<InterviewFeedback>("EndSession");
-                setFeedback(report);
-                saveRecord({
-                    mode,
-                    language,
-                    codingScore: report.codingScore,
-                    communicationScore: report.communicationScore,
-                    feedbackPoints: report.feedbackPoints ?? [],
-                });
-            } catch (e) {
-                console.error("Error getting feedback:", e);
-            }
-
-            await connection.stop();
+            await requestReport(connection);
         }
-        setIsLoadingFeedback(false);
+    };
+
+    const canRetryReport = connection?.state === signalR.HubConnectionState.Connected;
+
+    const retryReport = () => {
+        if (connection && canRetryReport) requestReport(connection);
+    };
+
+    const leaveWithoutReport = () => {
+        connection?.stop();
+        setReportState('idle');
+        navigate('/');
+    };
+
+    const closeReport = () => {
+        setReportState('idle');
+        setFeedback(null);
     };
 
     // Full teardown when leaving mid-session (so the AI doesn't keep talking on the home page).
@@ -337,37 +426,19 @@ function Interview() {
     };
 
     const runCode = async () => {
+        if (isRunning) return; // busy button keeps focus, so ignore repeat presses
         setIsRunning(true);
         setConsoleOpen(true);
-        setOutput("Running...");
-
-        try {
-            const response = await fetch(`${API_URL}/api/code/run`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    language: language,
-                    code: codeRef.current
-                })
-            });
-
-            const data = await response.json();
-
-            if (data.error) {
-                setOutput(`❌ Error:\n${data.error}`);
-            } else {
-                setOutput(data.output || "No output returned.");
-            }
-        } catch (e) {
-            console.error("Failed to connect to execution server.", e);
-        }
+        const result = await runProgram(language, currentCode(), setRunStatus);
+        setOutput(result.output);
+        setOutputIsError(result.isError);
         setIsRunning(false);
     };
     runCodeRef.current = runCode; // keep the Ctrl+Enter shortcut pointing at the latest
 
     const copyCode = async () => {
         try {
-            await navigator.clipboard.writeText(codeRef.current);
+            await navigator.clipboard.writeText(currentCode());
             showToast('Code copied to clipboard', 'success');
         } catch {
             showToast('Could not copy code', 'error');
@@ -375,11 +446,14 @@ function Interview() {
     };
 
     const resetCode = () => {
-        setCode("// Start coding...\n");
-        showToast('Editor reset', 'info');
+        const previous = currentCode();
+        setCode(starterFor(language));
+        showToast('Editor reset', 'info', { label: 'Undo', onClick: () => setCode(previous) });
     };
 
     const handleEditorMount = (editor: any, monaco: any) => {
+        editorRef.current = editor;
+        editor.onDidDispose(() => { editorRef.current = null; });
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCodeRef.current());
     };
 
@@ -411,7 +485,7 @@ function Interview() {
             recognitionRef.current.onerror = (event: any) => {
                 console.error("🎤 Speech recognition error:", event.error);
                 if (event.error === 'no-speech' || event.error === 'aborted') {
-                    // Silence during a thinking pause — keep alive (onend restarts the mic)
+                    // Silence during a thinking pause: keep alive (onend restarts the mic)
                     return;
                 }
                 // Fatal errors: stop the capture and inform the user
@@ -459,41 +533,54 @@ function Interview() {
         };
     }, [connection]);
 
+    const persona = personaFor(mode);
+    const PersonaIcon = persona.icon;
+    const fixedLang = fixedLanguageFor(mode);
+
     return (
-        <div className="iv-container">
+        <div className={`iv-container ${isConnected ? 'is-live' : ''}`}>
 
             {/* PRE-SESSION SETUP LOBBY */}
             {!isConnected && (
-                <div className="iv-lobby">
-                    <div className="iv-lobby-card fade-in">
-                        <button className="iv-lobby-back" onClick={() => navigate('/')}>← Back home</button>
+                <main className="iv-lobby">
+                    <div className="iv-lobby-card">
+                        <Link to="/" className="iv-lobby-back">
+                            <ArrowLeft size={16} aria-hidden="true" /> Back home
+                        </Link>
                         <h1>Set up your interview</h1>
                         <p className="iv-lobby-sub">Choose who interviews you and the language you'll code in.</p>
 
-                        <label className="field-label">Interview mode</label>
-                        <select className="select" value={mode} onChange={(e) => setMode(e.target.value)}>
-                            <option value="Standard">Standard</option>
-                            {ARENAS.filter((a) => !a.resume).map((a) => (
-                                <option key={a.id} value={a.id}>{a.title}</option>
-                            ))}
-                        </select>
+                        <div className="iv-field">
+                            <label className="field-label" htmlFor={modeSelectId}>Interview mode</label>
+                            <select id={modeSelectId} className="select" value={mode} onChange={(e) => setMode(e.target.value)}>
+                                <option value="Standard">Standard</option>
+                                {ARENAS.filter((a) => !a.resume).map((a) => (
+                                    <option key={a.id} value={a.id}>{a.title}</option>
+                                ))}
+                            </select>
 
-                        <div className="iv-lobby-persona">
-                            <div className="persona-avatar">{personaFor(mode).emoji}</div>
-                            <div className="persona-info">
-                                <div className="persona-name">{personaFor(mode).name}</div>
-                                <div className="persona-tag">{personaFor(mode).tagline}</div>
+                            <div className="iv-lobby-persona">
+                                <div className="persona-avatar" aria-hidden="true"><PersonaIcon size={22} /></div>
+                                <div className="persona-info">
+                                    <div className="persona-name">{persona.name}</div>
+                                    <div className="persona-tag">{persona.tagline}</div>
+                                </div>
                             </div>
                         </div>
 
                         {!isCodingMode(mode) ? (
-                            <div className="iv-lobby-note">💬 Conversation only — this mode has no coding.</div>
-                        ) : fixedLanguageFor(mode) ? (
-                            <div className="iv-lobby-note">🔒 Language fixed to {LANG_LABEL[fixedLanguageFor(mode)!]} for this arena.</div>
+                            <div className="iv-lobby-note">
+                                <ChatCircle size={16} aria-hidden="true" /> Conversation only. This mode has no coding.
+                            </div>
+                        ) : fixedLang ? (
+                            <div className="iv-lobby-note">
+                                <Lock size={16} aria-hidden="true" /> Language fixed to {LANG_LABEL[fixedLang]} for this arena.
+                            </div>
                         ) : (
-                            <>
-                                <label className="field-label">Language</label>
+                            <div className="iv-field">
+                                <label className="field-label" htmlFor={langSelectId}>Language</label>
                                 <select
+                                    id={langSelectId}
                                     className="select"
                                     value={language}
                                     onChange={(e) => { setLanguage(e.target.value); setCode(starterFor(e.target.value)); }}
@@ -502,35 +589,39 @@ function Interview() {
                                         <option key={l.id} value={l.id}>{l.label}</option>
                                     ))}
                                 </select>
-                            </>
+                            </div>
                         )}
 
                         {mode === 'Resume' && resumeText && (
-                            <div className="iv-lobby-resume">📄 Resume loaded ✓</div>
+                            <div className="iv-lobby-resume">
+                                <CheckCircle size={16} weight="fill" aria-hidden="true" /> Résumé loaded
+                            </div>
                         )}
 
-                        <button className="btn btn-primary btn-lg btn-block" onClick={startInterview} style={{ marginTop: 'var(--s-5)' }}>
-                            ● Start interview →
+                        <button
+                            type="button"
+                            className="btn btn-primary btn-lg btn-block iv-lobby-start"
+                            onClick={startInterview}
+                            aria-disabled={isStarting}
+                        >
+                            {isStarting ? 'Connecting…' : <>Start interview <ArrowRight size={18} aria-hidden="true" /></>}
                         </button>
 
                         <p className="iv-lobby-hint">
                             {VOICE_SUPPORTED
-                                ? '💡 Voice works best in Chrome or Edge on desktop.'
-                                : "🎙️ This browser doesn't support voice — you'll type your answers (works the same)."}
+                                ? <><Lightbulb size={14} aria-hidden="true" /> Voice works best in Chrome or Edge on desktop.</>
+                                : <><MicrophoneSlash size={14} aria-hidden="true" /> This browser doesn't support voice, so you'll type your answers. It works the same.</>}
                         </p>
                     </div>
-                </div>
+                </main>
             )}
 
             {/* LEFT PANE: EDITOR (hidden for conversation-only modes like System Design / Amazon) */}
             {isCodingMode(mode) && (
-            <div className="iv-editor-pane">
+            <div className="iv-editor-pane" inert={!isConnected}>
                 <div className="iv-toolbar">
-                    <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={exitToHome}
-                    >
-                        ← Exit
+                    <button type="button" className="btn btn-ghost btn-sm icon-on-mobile" onClick={exitToHome}>
+                        <ArrowLeft size={16} aria-hidden="true" /> <span className="btn-label">Exit</span>
                     </button>
 
                     <div className="divider" />
@@ -539,21 +630,22 @@ function Interview() {
 
                     <div className="spacer" />
 
-                    <button className="btn btn-ghost btn-sm" onClick={copyCode} title="Copy code">
-                        ⧉ Copy
+                    <button type="button" className="btn btn-ghost btn-sm icon-on-mobile" onClick={copyCode}>
+                        <Copy size={16} aria-hidden="true" /> <span className="btn-label">Copy</span>
                     </button>
-                    <button className="btn btn-ghost btn-sm" onClick={resetCode} title="Reset editor">
-                        ↺ Reset
+                    <button type="button" className="btn btn-ghost btn-sm icon-on-mobile" onClick={resetCode}>
+                        <ArrowCounterClockwise size={16} aria-hidden="true" /> <span className="btn-label">Reset</span>
                     </button>
 
-                    {/* RUN BUTTON */}
+                    {/* RUN BUTTON: JS/TS/Python run in the browser; other languages are AI-estimated */}
                     <button
+                        type="button"
                         className="btn btn-primary btn-sm"
                         onClick={runCode}
-                        disabled={isRunning}
-                        title="Run (Ctrl+Enter)"
+                        aria-disabled={isRunning}
+                        title={engineFor(language) === 'browser' ? 'Run your code in the browser (Ctrl+Enter)' : 'Get an AI-predicted output (Ctrl+Enter)'}
                     >
-                        {isRunning ? 'Running…' : '▶ Run'}
+                        <Play size={16} weight="fill" aria-hidden="true" /> {isRunning ? 'Running…' : 'Run'}
                     </button>
                 </div>
 
@@ -566,66 +658,57 @@ function Interview() {
                         onChange={(val) => setCode(val || "")}
                         beforeMount={defineMockmateTheme}
                         onMount={handleEditorMount}
-                        options={{
-                            automaticLayout: true, // re-measure on container resize (fixes collapsed editor on mobile / layout changes)
-                            minimap: { enabled: false },
-                            fontSize: 15,
-                            padding: { top: 16 },
-                            smoothScrolling: true,
-                            cursorBlinking: 'smooth',
-                            fontLigatures: true,
-                            fontFamily: "'JetBrains Mono', 'SF Mono', ui-monospace, monospace",
-                            scrollBeyondLastLine: false,
-                            roundedSelection: true,
-                        }}
+                        options={EDITOR_OPTIONS}
                     />
                 </div>
 
-                <div className={`iv-terminal ${consoleOpen ? '' : 'collapsed'}`}>
-                    <button
-                        className="iv-terminal-head"
-                        onClick={() => setConsoleOpen((o) => !o)}
-                        aria-expanded={consoleOpen}
-                        aria-label={consoleOpen ? 'Collapse console' : 'Expand console'}
-                    >
-                        <span className="iv-terminal-label">
-                            <span className="dot" aria-hidden="true" /> Console
-                        </span>
-                        <span className="iv-terminal-chevron" aria-hidden="true">{consoleOpen ? '▾' : '▸'}</span>
-                    </button>
-                    {consoleOpen && (
-                        <pre className={`iv-terminal-body ${output.startsWith('❌') ? 'error' : ''}`}>
-                            {output || "› Ready to run code…"}
-                        </pre>
-                    )}
-                </div>
+                <OutputConsole
+                    open={consoleOpen}
+                    onToggle={() => setConsoleOpen((o) => !o)}
+                    output={output}
+                    isError={outputIsError}
+                    isRunning={isRunning}
+                    source={engineFor(language) === 'browser' ? 'executed' : 'estimated'}
+                    status={runStatus}
+                />
             </div>
             )}
 
             {/* RIGHT PANE: CHAT */}
-            <div className={`iv-chat-pane ${!isCodingMode(mode) ? 'iv-chat-pane-full' : ''}`}>
+            <div className={`iv-chat-pane ${!isCodingMode(mode) ? 'iv-chat-pane-full' : ''}`} inert={!isConnected}>
                 {isConnected && (
-                    <div className="persona-header">
-                        <div className="persona-avatar">{personaFor(mode).emoji}</div>
+                    <div className="room-head">
+                        <div className="persona-avatar" aria-hidden="true"><PersonaIcon size={22} /></div>
                         <div className="persona-info">
-                            <div className="persona-name">{personaFor(mode).name}</div>
-                            <div className="persona-tag">{personaFor(mode).tagline}</div>
+                            <div className="persona-name">{persona.name}</div>
+                            <div className="persona-tag">{persona.tagline}</div>
                         </div>
                         <div className="persona-right">
-                            <span className="session-status"><span className="live-dot" /> {formatTime(elapsed)}</span>
-                            <button className="btn btn-danger btn-sm" onClick={endSession}>■ End</button>
+                            {!isCodingMode(mode) && (
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={exitToHome}>
+                                    <ArrowLeft size={16} aria-hidden="true" /> Exit
+                                </button>
+                            )}
+                            <span className="session-status">
+                                <span className="live-dot" aria-hidden="true" />
+                                <span className="sr-only">Session time</span>
+                                <time>{formatTime(elapsed)}</time>
+                            </span>
+                            <button type="button" className="btn btn-danger btn-sm" onClick={endSession}>
+                                <Square size={14} weight="fill" aria-hidden="true" /> End
+                            </button>
                         </div>
                     </div>
                 )}
 
-                <div className="chat-log">
+                <div ref={chatLogRef} className="chat-log" role="log" aria-live="polite" aria-label="Interview conversation">
                     {messages.length === 0 && (
                         <div className="chat-empty">Start a session to begin the conversation.</div>
                     )}
 
                     {messages.map((m, i) => (
                         <div key={i} className={`message ${m.sender}`}>
-                            <span className="sender">{m.sender}</span>
+                            <span className="sender">{m.sender === 'ai' ? persona.name : 'You'}</span>
                             {m.sender === 'ai' ? (
                                 <div className="markdown">
                                     <ReactMarkdown>{m.text}</ReactMarkdown>
@@ -638,128 +721,154 @@ function Interview() {
 
                     {isAiThinking && (
                         <div className="message ai thinking">
-                            <span className="sender">ai</span>
-                            <span className="typing"><i /><i /><i /></span>
+                            <span className="sender">{persona.name}</span>
+                            <span className="typing" aria-hidden="true"><i /><i /><i /></span>
+                            <span className="sr-only">The interviewer is thinking.</span>
                         </div>
                     )}
 
-                    <div ref={chatEndRef} />
                 </div>
 
-                {/* CHAT INPUT */}
-                <div className="chat-input-row">
+                {/* DOCK: type or speak. Fixed to the bottom of the screen on phones. */}
+                <div className="room-dock">
+                <form className="chat-input-row" onSubmit={handleSendText}>
                     <input
                         type="text"
                         className="input"
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSendText();
-                        }}
                         disabled={!isConnected}
+                        aria-label="Message the interviewer"
                         placeholder={isConnected ? "Type a message and press Enter…" : "Connect to chat…"}
                     />
                     <button
-                        className="btn btn-primary"
-                        onClick={handleSendText}
-                        disabled={!isConnected || !chatInput.trim()}
+                        type="submit"
+                        className="btn btn-secondary"
+                        disabled={!isConnected}
+                        aria-disabled={!chatInput.trim()}
                     >
-                        Send
+                        <PaperPlaneRight size={16} aria-hidden="true" /> Send
                     </button>
-                </div>
+                </form>
 
-                {/* 3. VISUALIZER & MIC AREA */}
-                <div className="voice-panel">
-                    {!isConnected ? (
-                        <div className="voice-disconnected">Connect to start speaking</div>
-                    ) : !VOICE_SUPPORTED ? (
-                        <div className="voice-note">
-                            🎙️ Voice isn't supported on this browser (e.g. iPhone / Safari).
-                            <strong> Type your answers in the box above</strong> — the interview works exactly the same.
-                        </div>
-                    ) : (
-                        <>
-                            <AudioVisualizer isListening={isListening} isSpeaking={isAiSpeaking} />
+                {!isConnected ? (
+                    <div className="voice-disconnected">Connect to start speaking</div>
+                ) : !VOICE_SUPPORTED ? (
+                    <div className="voice-note">
+                        Voice isn't supported in this browser (for example iPhone Safari).
+                        <strong> Type your answers in the box above.</strong> The interview works exactly the same.
+                    </div>
+                ) : (
+                    <>
+                        {isListening && previewText && (
+                            <div className="voice-preview">{previewText}</div>
+                        )}
 
+                        <div className="voice-bar">
                             <button
+                                type="button"
                                 className={`mic-button ${isListening ? 'mic-active' : 'mic-inactive'}`}
                                 onClick={toggleMic}
-                                aria-label={isListening ? 'Stop recording and send' : 'Start recording'}
-                                aria-pressed={isListening}
                             >
-                                {isListening ? 'STOP' : 'MIC'}
+                                {isListening
+                                    ? <><Stop size={20} weight="fill" aria-hidden="true" /> Stop &amp; send</>
+                                    : <><Microphone size={20} aria-hidden="true" /> Speak</>}
                             </button>
+
+                            <AudioVisualizer isListening={isListening} isSpeaking={isAiSpeaking} />
 
                             <div className={`voice-status ${isListening ? 'listening' : (isAiSpeaking ? 'speaking' : '')}`}>
                                 {isListening
-                                    ? "Listening… take your time, click STOP to send"
-                                    : (isAiSpeaking ? "AI is speaking…" : "Click to speak")}
+                                    ? "Listening. Take your time."
+                                    : (isAiSpeaking ? "Interviewer speaking…" : "Answer out loud")}
                             </div>
-
-                            {isListening && previewText && (
-                                <div className="voice-preview">{previewText}</div>
-                            )}
 
                             {/* INTERRUPT BUTTON */}
                             {isAiSpeaking && (
-                                <button className="btn btn-danger btn-sm" onClick={stopSpeaking}>
-                                    🛑 Stop Audio
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={stopSpeaking}>
+                                    <SpeakerSlash size={16} aria-hidden="true" /> Stop audio
                                 </button>
                             )}
-                        </>
+                        </div>
+                    </>
+                )}
+                </div>
+            </div>
+
+            {/* REPORT: loading (not dismissible) */}
+            <Modal open={reportState === 'loading'} label="Generating your report" className="modal-plain" dismissible={false}>
+                <div className="report-loading" role="status">
+                    <div className="spinner" aria-hidden="true" />
+                    Generating your report card…
+                </div>
+            </Modal>
+
+            {/* REPORT: failed, transcript kept for a retry */}
+            <Modal open={reportState === 'error'} label="Report failed" className="modal-wide" dismissible={false} role="alertdialog">
+                <div className="report-error-icon" aria-hidden="true"><WarningCircle size={28} /></div>
+                <h2>We couldn't generate your report</h2>
+                <p className="modal-sub">
+                    {canRetryReport
+                        ? 'The AI grader is busy or timed out. Your conversation is still on the server, so you can try again.'
+                        : 'The connection to the server was lost, so this session can no longer be scored.'}
+                </p>
+                <div className="report-actions">
+                    <button type="button" className="btn btn-secondary btn-lg" onClick={leaveWithoutReport}>
+                        Leave without report
+                    </button>
+                    {canRetryReport && (
+                        <button type="button" className="btn btn-primary btn-lg" onClick={retryReport}>
+                            <ArrowClockwise size={18} aria-hidden="true" /> Try again
+                        </button>
                     )}
                 </div>
+            </Modal>
 
-                {/* FEEDBACK REPORT MODAL */}
-                {(feedback || isLoadingFeedback) && (
-                    <div className="modal-overlay">
-                        {isLoadingFeedback ? (
-                            <div className="report-loading" role="status">
-                                <div className="spinner" aria-hidden="true" />
-                                <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>Generating your report card…</div>
+            {/* REPORT: results */}
+            <Modal open={reportState === 'done' && !!feedback} onClose={closeReport} label="Interview results" className="modal-wide report">
+                <button type="button" className="modal-close" aria-label="Close results" onClick={closeReport}>
+                    <X size={16} aria-hidden="true" />
+                </button>
+                <h2>Interview results</h2>
+                <p className="report-sub">Here's how the session went.</p>
+
+                {feedback && (
+                    <>
+                        <div className="score-row">
+                            <div className="score-card">
+                                <div className={`score-value ${scoreClass(feedback.codingScore)}`}>
+                                    {feedback.codingScore}<span className="score-max">/10</span>
+                                </div>
+                                <div className="score-label">Coding</div>
                             </div>
-                        ) : (
-                            <div className="report" role="dialog" aria-modal="true" aria-label="Interview results">
-                                <h1>Interview Results</h1>
-                                <p className="report-sub">Here's how the session went.</p>
-
-                                <div className="score-row">
-                                    <div className="score-card">
-                                        <div className={`score-value ${feedback?.codingScore && feedback.codingScore >= 7 ? 'good' : 'bad'}`}>
-                                            {feedback?.codingScore}<span style={{ fontSize: '1.2rem', color: 'var(--text-3)' }}>/10</span>
-                                        </div>
-                                        <div className="score-label">Coding</div>
-                                    </div>
-                                    <div className="score-card">
-                                        <div className={`score-value ${feedback?.communicationScore && feedback.communicationScore >= 7 ? 'good' : 'bad'}`}>
-                                            {feedback?.communicationScore}<span style={{ fontSize: '1.2rem', color: 'var(--text-3)' }}>/10</span>
-                                        </div>
-                                        <div className="score-label">Communication</div>
-                                    </div>
+                            <div className="score-card">
+                                <div className={`score-value ${scoreClass(feedback.communicationScore)}`}>
+                                    {feedback.communicationScore}<span className="score-max">/10</span>
                                 </div>
-
-                                <div className="feedback-box">
-                                    <h3>📝 Feedback</h3>
-                                    <ul>
-                                        {feedback?.feedbackPoints.map((point, i) => (
-                                            <li key={i}>{point}</li>
-                                        ))}
-                                    </ul>
-                                </div>
-
-                                <div style={{ display: 'flex', gap: 'var(--s-3)' }}>
-                                    <button className="btn btn-secondary btn-lg" style={{ flex: 1 }} onClick={() => navigate('/')}>
-                                        🏠 Home
-                                    </button>
-                                    <button className="btn btn-primary btn-lg" style={{ flex: 1 }} onClick={() => navigate('/dashboard')}>
-                                        📊 View Dashboard
-                                    </button>
-                                </div>
+                                <div className="score-label">Communication</div>
                             </div>
-                        )}
-                    </div>
+                        </div>
+
+                        <div className="feedback-box">
+                            <h3><NotePencil size={18} aria-hidden="true" /> Feedback</h3>
+                            <ul>
+                                {feedback.feedbackPoints.length
+                                    ? feedback.feedbackPoints.map((point, i) => <li key={i}>{point}</li>)
+                                    : <li>No written feedback this time.</li>}
+                            </ul>
+                        </div>
+                    </>
                 )}
-            </div>
+
+                <div className="report-actions">
+                    <Link to="/" className="btn btn-secondary btn-lg">
+                        <House size={18} aria-hidden="true" /> Home
+                    </Link>
+                    <Link to="/dashboard" className="btn btn-primary btn-lg">
+                        <ChartLineUp size={18} aria-hidden="true" /> View Dashboard
+                    </Link>
+                </div>
+            </Modal>
         </div>
     );
 }

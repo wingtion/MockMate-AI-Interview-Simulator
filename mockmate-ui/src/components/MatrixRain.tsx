@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { cssToken } from '../lib/tokens';
 
 // Matrix-style digital rain, rendered to a full-screen canvas behind the page content.
 const CHARS = (
@@ -17,6 +18,9 @@ export default function MatrixRain() {
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+
+        const rainColor = cssToken('--accent', '#239978');
+        const trailColor = 'rgba(10, 11, 13, 0.08)'; // --bg at 8%, builds the fading trail
 
         let width = 0;
         let height = 0;
@@ -47,11 +51,11 @@ export default function MatrixRain() {
             if (frame++ % SPEED !== 0) return;
 
             // translucent fill creates the fading trail
-            ctx.fillStyle = 'rgba(10, 11, 13, 0.08)';
+            ctx.fillStyle = trailColor;
             ctx.fillRect(0, 0, width, height);
 
-            ctx.fillStyle = '#3ecf8e';
-            ctx.font = `${FONT_SIZE}px 'JetBrains Mono', monospace`;
+            ctx.fillStyle = rainColor;
+            ctx.font = `${FONT_SIZE}px 'Geist Mono Variable', monospace`;
 
             for (let i = 0; i < drops.length; i++) {
                 const ch = CHARS[(Math.random() * CHARS.length) | 0];

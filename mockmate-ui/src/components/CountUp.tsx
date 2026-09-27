@@ -11,12 +11,11 @@ export default function CountUp({
     duration?: number;
 }) {
     const [n, setN] = useState(0);
+    // Reduced motion: show the final value straight away, no animation state.
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     useEffect(() => {
-        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-            setN(value);
-            return;
-        }
+        if (reduceMotion) return;
         let raf = 0;
         const start = performance.now();
         const tick = (now: number) => {
@@ -28,7 +27,8 @@ export default function CountUp({
         };
         raf = requestAnimationFrame(tick);
         return () => cancelAnimationFrame(raf);
-    }, [value, duration]);
+    }, [value, duration, reduceMotion]);
 
-    return <>{decimals ? n.toFixed(decimals) : Math.round(n)}</>;
+    const shown = reduceMotion ? value : n;
+    return <>{decimals ? shown.toFixed(decimals) : Math.round(shown)}</>;
 }

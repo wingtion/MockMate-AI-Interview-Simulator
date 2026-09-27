@@ -10,6 +10,9 @@
     {
         public string Output { get; set; } = "";
         public string Error { get; set; } = "";
+        // Server runs are always "estimated" (predicted by the LLM); the browser labels its
+        // own real runs "executed". The UI shows which one produced the output.
+        public string Source { get; set; } = "estimated";
     }
 
     // Piston API specific structure

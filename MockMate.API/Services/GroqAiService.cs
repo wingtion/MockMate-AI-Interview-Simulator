@@ -10,6 +10,13 @@ namespace MockMate.API.Services
     {
         private readonly HttpClient _httpClient;
         private readonly string _apiKey;
+        private readonly string _model;
+        private const string DefaultModel = "openai/gpt-oss-20b";
+
+        private const string StyleRules =
+            " Formatting rules: write plain, natural English that sounds right when read aloud." +
+            " Never use emoji. Never use em-dashes or en-dashes; use a comma, period, colon, or parentheses instead." +
+            " Markdown is fine for code blocks, short lists, and bold key terms.";
         private readonly JsonSerializerOptions _jsonOptions;
         private readonly ConversationStore _store;
 
@@ -17,6 +24,8 @@ namespace MockMate.API.Services
         {
             _httpClient = httpClient;
             _apiKey = configuration["GroqApiKey"];
+            // Groq retires models over time; override with the GroqModel setting instead of editing code.
+            _model = configuration["GroqModel"] is { Length: > 0 } m ? m : DefaultModel;
             _store = store;
             _jsonOptions = new JsonSerializerOptions
             {
@@ -67,6 +76,9 @@ namespace MockMate.API.Services
                     break;
             }
 
+            // Replies are shown in the chat and read aloud by text-to-speech.
+            systemPrompt += StyleRules;
+
             // 2. Add User's new message to history
             var userMessage = new
             {
@@ -90,8 +102,8 @@ namespace MockMate.API.Services
             // 4. Prepare the Request
             var requestData = new
             {
-                //"llama-3.3-70b-versatile"
-                model = "llama-3.1-8b-instant",
+
+                model = _model,
                 messages = history,
                 temperature = 0.6
             };
@@ -126,53 +138,6 @@ namespace MockMate.API.Services
             };
         }
 
-        public async Task<string> GenerateProblemAsync(string topic, string difficulty)
-        {
-            var prompt = $@"
-Generate a coding interview problem.
-Topic: {topic}
-Difficulty: {difficulty}
-
-Format the response in clean GitHub-flavored Markdown with these sections:
-## (a short problem title)
-A concise description paragraph.
-
-**Examples**
-Show one or two input/output examples in a code block.
-
-**Constraints**
-A short bullet list.
-
-Do NOT provide the solution or any code that solves it. Keep it concise.
-";
-
-            var requestData = new
-            {
-                model = "llama-3.1-8b-instant", 
-                messages = new[]
-                {
-            new { role = "system", content = "You are a LeetCode problem generator." },
-            new { role = "user", content = prompt }
-        }
-            };
-
-            var jsonContent = JsonSerializer.Serialize(requestData, _jsonOptions);
-            var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://api.groq.com/openai/v1/chat/completions");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-            request.Content = httpContent;
-
-            var response = await _httpClient.SendAsync(request);
-
-            if (!response.IsSuccessStatusCode) return "Failed to generate problem. Please try again.";
-
-            var responseString = await response.Content.ReadAsStringAsync();
-            var groqResponse = JsonSerializer.Deserialize<GroqApiResponse>(responseString, _jsonOptions);
-
-            return groqResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "No problem generated.";
-        }
-
         public async Task<InterviewFeedback> GenerateFeedbackAsync(string sessionId)
         {
             var history = _store.GetHistory(sessionId);
@@ -200,7 +165,7 @@ Do NOT provide the solution or any code that solves it. Keep it concise.
             // 3. Send to Groq
             var requestData = new
             {
-                model = "llama-3.1-8b-instant", // Cheapest model for grading
+                model = _model,
                 messages = feedbackHistory,
                 response_format = new { type = "json_object" }, 
                 temperature = 0.2
@@ -216,19 +181,33 @@ Do NOT provide the solution or any code that solves it. Keep it concise.
             var response = await _httpClient.SendAsync(request);
             var responseString = await response.Content.ReadAsStringAsync();
 
+            // A failed grading call must surface as an error, not as a fake 0/10
+            // report: the hub keeps the history on failure so the client can retry.
+            if (!response.IsSuccessStatusCode)
+                throw new HttpRequestException($"Groq grading request failed with status {(int)response.StatusCode}.");
+
             // 4. Parse the JSON result
             var groqResponse = JsonSerializer.Deserialize<GroqApiResponse>(responseString, _jsonOptions);
-            var rawJson = groqResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "{}";
+            var rawJson = groqResponse?.Choices?.FirstOrDefault()?.Message?.Content
+                ?? throw new InvalidOperationException("Groq grading response had no content.");
 
+            InterviewFeedback? feedback;
             try
             {
-                var feedback = JsonSerializer.Deserialize<InterviewFeedback>(rawJson, _jsonOptions);
-                return feedback ?? new InterviewFeedback { FeedbackPoints = new() { "Error parsing feedback." } };
+                feedback = JsonSerializer.Deserialize<InterviewFeedback>(rawJson, _jsonOptions);
             }
-            catch
+            catch (JsonException ex)
             {
-                return new InterviewFeedback { CodingScore = 0, CommunicationScore = 0, FeedbackPoints = new() { "AI failed to generate report." } };
+                throw new InvalidOperationException("Groq grading response was not valid JSON.", ex);
             }
+
+            if (feedback is null
+                || feedback.CodingScore is < 1 or > 10
+                || feedback.CommunicationScore is < 1 or > 10)
+                throw new InvalidOperationException("Groq grading response had missing or out-of-range scores.");
+
+            feedback.FeedbackPoints ??= new();
+            return feedback;
         }
     }
 

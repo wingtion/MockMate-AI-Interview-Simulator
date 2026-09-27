@@ -1,25 +1,24 @@
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { ArrowLeft } from '@phosphor-icons/react';
 import '../App.css';
 
 function NotFound() {
-    const navigate = useNavigate();
-
     return (
-        <div className="page notfound">
+        <main className="page notfound">
             <div className="notfound-card fade-in">
-                <div className="notfound-code">404</div>
+                <div className="notfound-code" aria-hidden="true">404</div>
                 <h1>Page not found</h1>
                 <p>The page you're looking for doesn't exist or may have moved.</p>
                 <div className="notfound-actions">
-                    <button className="btn btn-primary btn-lg" onClick={() => navigate('/')}>
-                        ← Back home
-                    </button>
-                    <button className="btn btn-secondary btn-lg" onClick={() => navigate('/interview/Standard')}>
+                    <Link to="/" className="btn btn-secondary btn-lg">
+                        <ArrowLeft size={18} aria-hidden="true" /> Back home
+                    </Link>
+                    <Link to="/interview/Standard" className="btn btn-primary btn-lg">
                         Start interview
-                    </button>
+                    </Link>
                 </div>
             </div>
-        </div>
+        </main>
     );
 }
 

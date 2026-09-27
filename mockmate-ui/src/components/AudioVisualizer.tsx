@@ -1,4 +1,5 @@
-﻿import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
+import { cssToken } from '../lib/tokens';
 
 interface VisualizerProps {
     isListening: boolean;
@@ -15,6 +16,11 @@ const AudioVisualizer = ({ isListening, isSpeaking }: VisualizerProps) => {
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+
+        // Signal Light Rule: red while you record, mint while the interviewer speaks.
+        const idleColor = cssToken('--surface-hover', '#2c2f37');
+        const recColor = cssToken('--red', '#ff5f5f');
+        const speakColor = cssToken('--accent', '#239978');
 
         let animationId: number;
 
@@ -34,10 +40,9 @@ const AudioVisualizer = ({ isListening, isSpeaking }: VisualizerProps) => {
                 );
             }
 
-            // Determine color (matches design tokens)
-            let color = '#3a3d45';
-            if (isListening) color = '#ff5f5f';
-            else if (isSpeaking) color = '#5e9dff';
+            let color = idleColor;
+            if (isListening) color = recColor;
+            else if (isSpeaking) color = speakColor;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 

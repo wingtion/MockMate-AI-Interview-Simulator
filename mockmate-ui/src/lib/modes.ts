@@ -1,3 +1,16 @@
+import {
+    Atom,
+    Brain,
+    Cloud,
+    Database,
+    FileText,
+    Rocket,
+    Target,
+    TreeStructure,
+    UsersThree,
+    type Icon,
+} from '@phosphor-icons/react';
+
 // Single source of truth for interview arenas (modes) and editor languages.
 // Home (bento grid) and Interview (lobby + persona + editor) both read from here
 // so the three never drift apart. The .NET backend (GroqAiService) holds the
@@ -11,11 +24,11 @@ export type ArenaLevel = 'hard' | 'medium' | 'expert' | 'soft' | 'info';
 export type ArenaCategory = 'company' | 'domain' | 'core';
 
 export interface Arena {
-    id: string;             // modeParam — must match the backend switch + the /interview/:id URL
-    emoji: string;
+    id: string;             // modeParam: must match the backend switch + the /interview/:id URL
+    icon: Icon;             // Phosphor icon for the card, lobby, and persona header
     title: string;          // card heading + lobby dropdown label
     desc: string;           // card description
-    category: ArenaCategory;                            // drives the icon accent tint
+    category: ArenaCategory;                            // grouping only; icons stay neutral (One Accent Rule)
     difficulty: { label: string; level: ArenaLevel };  // rendered as the corner badge
     tags?: ArenaTag[];      // optional topic chips along the bottom
     coding: boolean;        // false = conversation only (editor + language picker hidden)
@@ -30,7 +43,7 @@ export interface Arena {
 export const ARENAS: Arena[] = [
     {
         id: 'Google',
-        emoji: '🧠',
+        icon: Brain,
         title: 'Google Algorithms',
         desc: 'Data structures, graph traversals, and shaving down your Big-O. Strict and rigorous.',
         category: 'company',
@@ -42,7 +55,7 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'Resume',
-        emoji: '📄',
+        icon: FileText,
         title: 'Grill My Résumé',
         desc: 'Upload your PDF résumé. The AI digs into your real projects and grills you on them.',
         category: 'core',
@@ -53,7 +66,7 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'Meta',
-        emoji: '⚛️',
+        icon: Atom,
         title: 'Meta Frontend',
         desc: 'Build a real interactive UI component. React, state management, and product sense.',
         category: 'company',
@@ -64,9 +77,9 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'SystemDesign',
-        emoji: '🏗️',
+        icon: TreeStructure,
         title: 'System Design',
-        desc: 'Architect systems that scale — caching, sharding, load balancing, and trade-offs.',
+        desc: 'Architect systems that scale: caching, sharding, load balancing, and trade-offs.',
         category: 'domain',
         difficulty: { label: 'Expert', level: 'expert' },
         coding: false,
@@ -74,9 +87,9 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'SQL',
-        emoji: '🗄️',
+        icon: Database,
         title: 'SQL & Data',
-        desc: 'Write real queries against a schema — joins, aggregation, indexes, window functions.',
+        desc: 'Write real queries against a schema: joins, aggregation, indexes, window functions.',
         category: 'domain',
         difficulty: { label: 'Medium', level: 'medium' },
         tags: [{ label: 'Queries' }],
@@ -86,7 +99,7 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'Amazon',
-        emoji: '📦',
+        icon: UsersThree,
         title: 'Amazon Leadership',
         desc: "Behavioral deep-dive on Amazon's Leadership Principles, structured with STAR. No code.",
         category: 'company',
@@ -96,9 +109,9 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'DevOps',
-        emoji: '☁️',
+        icon: Cloud,
         title: 'DevOps & Cloud',
-        desc: 'CI/CD pipelines, containers, and infra-as-code. Ship it — or debug a broken deploy.',
+        desc: 'CI/CD pipelines, containers, and infra-as-code. Ship it, or debug a broken deploy.',
         category: 'domain',
         difficulty: { label: 'Hard', level: 'hard' },
         tags: [{ label: 'Cloud' }],
@@ -108,9 +121,9 @@ export const ARENAS: Arena[] = [
     },
     {
         id: 'Startup',
-        emoji: '🚀',
+        icon: Rocket,
         title: 'Startup Velocity',
-        desc: 'Ship a feature fast. Pragmatic full-stack work — React, Node, clean readable code.',
+        desc: 'Ship a feature fast. Pragmatic full-stack work: React, Node, clean readable code.',
         category: 'core',
         difficulty: { label: 'Medium', level: 'medium' },
         coding: true,
@@ -137,7 +150,7 @@ export const LANG_LABEL: Record<string, string> = {
     yaml: 'YAML',
 };
 
-const DEFAULT_PERSONA = { emoji: '🎯', name: 'Technical Interviewer', tagline: 'Friendly but professional' };
+const DEFAULT_PERSONA = { icon: Target, name: 'Technical Interviewer', tagline: 'Friendly but professional' };
 
 const arenaById = (mode: string): Arena | undefined => ARENAS.find((a) => a.id === mode);
 
@@ -148,12 +161,29 @@ const commentLeader = (lang: string): string => {
     return '//';
 };
 
-export const starterFor = (lang: string): string =>
-    `${commentLeader(lang)} The interviewer will give you a problem. Write your solution here…\n`;
+// Run treats the file as a whole program (JS/TS/Python run in the browser, the rest
+// are AI-predicted), so compiled languages start with an entry point.
+export const starterFor = (lang: string): string => {
+    const note = `${commentLeader(lang)} The interviewer will give you a problem. Write your solution here…\n`;
+    switch (lang) {
+        case 'java':
+            return `${note}public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello from Java");\n    }\n}\n`;
+        case 'csharp':
+            return `${note}using System;\n\npublic class Program {\n    public static void Main() {\n        Console.WriteLine("Hello from C#");\n    }\n}\n`;
+        case 'cpp':
+            return `${note}#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    cout << "Hello from C++" << endl;\n    return 0;\n}\n`;
+        case 'go':
+            return `${note}package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello from Go")\n}\n`;
+        case 'rust':
+            return `${note}fn main() {\n    println!("Hello from Rust");\n}\n`;
+        default:
+            return note;
+    }
+};
 
 export const personaFor = (mode: string) => {
     const a = arenaById(mode);
-    return a ? { emoji: a.emoji, name: a.persona.name, tagline: a.persona.tagline } : DEFAULT_PERSONA;
+    return a ? { icon: a.icon, name: a.persona.name, tagline: a.persona.tagline } : DEFAULT_PERSONA;
 };
 
 // Standard (the lobby default) and any unknown mode are coding modes.

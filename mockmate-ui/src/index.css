@@ -1,70 +1,86 @@
 /* ===========================================================
-   MockMate — Design System: Tokens, Reset & Base
+   MockMate Design System: Tokens, Reset & Base
+   "The Recording Studio". See DESIGN.md at the repo root.
+   Dark-only for now; every color lives here so a light theme
+   can be added later by redefining these tokens.
    =========================================================== */
 
 :root {
   /* ---- Surfaces ---- */
   --bg: #0a0b0d;
   --bg-elev: #0e0f12;
+  --bg-sunken: #0c0d10;
   --surface-1: #141519;
   --surface-2: #1a1c22;
   --surface-3: #23252d;
+  --surface-hover: #2c2f37;
 
   /* ---- Borders ---- */
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.12);
+  --border-hover: rgba(255, 255, 255, 0.18);
+  --wash: rgba(255, 255, 255, 0.02);  /* faint hover on borderless rows */
+  --scrim: rgba(10, 11, 13, 0.76);     /* --bg over the Matrix rain behind body copy */
 
   /* ---- Text ---- */
   --text-1: #f4f5f7;
   --text-2: #a8adb8;
-  --text-3: #696e7b;
-  --text-on-accent: #04130b;
+  --text-3: #858a96; /* readable floor: ~5.7:1 on --bg, ~5:1 on --surface-2 */
+  --text-on-accent: #03140f;
 
-  /* ---- Accent (brand) ---- */
-  --accent: #3ecf8e;
-  --accent-hover: #4bdc9b;
-  --accent-press: #33b87d;
-  --accent-soft: rgba(62, 207, 142, 0.12);
-  --accent-line: rgba(62, 207, 142, 0.35);
-  --accent-glow: rgba(62, 207, 142, 0.25);
+  /* ---- Accent: Studio Mint (primary action + "interviewer speaking") ---- */
+  --accent: #239978;
+  --accent-hover: #2fb592;
+  --accent-press: #1d8166;
+  --accent-soft: rgba(35, 153, 120, 0.12);
+  --accent-line: rgba(35, 153, 120, 0.35);
+  --accent-glow: rgba(35, 153, 120, 0.22);
 
   /* ---- Semantic ---- */
-  --blue: #5e9dff;
-  --blue-soft: rgba(94, 157, 255, 0.12);
-  --red: #ff5f5f;
+  --red: #ff5f5f; /* Rec Red: recording + errors only */
   --red-soft: rgba(255, 95, 95, 0.1);
+  --red-hover: rgba(255, 95, 95, 0.16);
   --red-line: rgba(255, 95, 95, 0.32);
+  --text-on-red: #1d0707;
   --amber: #f5a623;
   --amber-soft: rgba(245, 166, 35, 0.12);
-  --violet: #a78bfa;
-  --violet-soft: rgba(167, 139, 250, 0.12);
+  --amber-line: rgba(245, 166, 35, 0.3);
+  --data-2: #c4c8d0; /* second chart series; no second accent hue */
 
-  /* ---- Radius ---- */
+  /* ---- Radius: controls / containers / floating layers ---- */
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
-  --r-xl: 22px;
-  --r-2xl: 28px;
   --r-full: 999px;
 
   /* ---- Spacing scale (4px base) ---- */
-  --s-1: 4px;  --s-2: 8px;   --s-3: 12px; --s-4: 16px;
-  --s-5: 20px; --s-6: 24px;  --s-8: 32px; --s-10: 40px;
-  --s-12: 48px; --s-16: 64px; --s-20: 80px; --s-24: 96px;
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px;
+  --s-6: 24px; --s-8: 32px; --s-12: 48px; --s-16: 64px; --s-24: 96px;
 
   /* ---- Shadows ---- */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.38);
   --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.55);
-  --shadow-accent: 0 10px 34px rgba(62, 207, 142, 0.18);
+  --shadow-accent: 0 10px 34px rgba(35, 153, 120, 0.18);
+
+  /* ---- Console keys (buttons) ---- */
+  --key: #e6e8ec;        /* primary key: off-white, not a brand color */
+  --key-hover: #f4f5f7;
+  --key-press: #d3d6dc;
+  --key-text: #0a0b0d;
+  --key-bevel: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 -2px 0 rgba(10, 11, 13, 0.18), 0 1px 2px rgba(0, 0, 0, 0.45);
+  --key-pressed: inset 0 1px 2px rgba(10, 11, 13, 0.25);
+  --key-bevel-dark: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 -2px 0 rgba(0, 0, 0, 0.35);
+  --key-pressed-dark: inset 0 1px 2px rgba(0, 0, 0, 0.4);
 
   /* ---- Typography ---- */
-  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, monospace;
+  --font-sans: 'Geist Variable', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* ---- Motion ---- */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --dur: 0.22s;
+  --rise: 16px; /* entrance travel; 0 under reduced motion */
 
   color-scheme: dark;
   font-family: var(--font-sans);
@@ -92,11 +108,12 @@ html {
 }
 
 body {
-  min-height: 100vh;
+  min-height: 100dvh;
   background-color: var(--bg);
   color: var(--text-1);
   overflow-x: hidden;
-  letter-spacing: -0.011em;
+  letter-spacing: -0.006em;
+  caret-color: var(--accent);
 }
 
 #root {
@@ -110,6 +127,7 @@ h1, h2, h3, h4, h5 {
   line-height: 1.12;
   letter-spacing: -0.022em;
   color: var(--text-1);
+  text-wrap: balance;
 }
 
 p {
@@ -130,6 +148,13 @@ textarea {
 a {
   color: var(--accent);
   text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+/* Tabular numerals wherever numbers are compared */
+time,
+.num {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Selection ---- */
@@ -153,7 +178,7 @@ a {
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #34373f;
+  background: var(--surface-hover);
   background-clip: padding-box;
 }
 
@@ -163,10 +188,26 @@ a {
   outline-offset: 2px;
 }
 
+/* ---- Utilities ---- */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Reduced motion: entrances fade in place instead of travelling, and
+   decorative loops stop. State feedback (mic pulse, spinner) stays. */
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  :root {
+    --rise: 0px;
+  }
+  html {
+    scroll-behavior: auto;
   }
 }

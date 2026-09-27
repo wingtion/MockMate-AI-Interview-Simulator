@@ -6,7 +6,6 @@ namespace MockMate.API.Services
     {
         Task<AiResponse> GetResponseAsync(UserInput input, string sessionId);
         Task<InterviewFeedback> GenerateFeedbackAsync(string sessionId);
-        Task<string> GenerateProblemAsync(string topic, string difficulty);
 
     }
 }

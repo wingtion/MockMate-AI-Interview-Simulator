@@ -8,14 +8,16 @@ public class InterviewHub : Hub
 {
     private readonly IAiService _aiService;
     private readonly ConversationStore _store;
+    private readonly ILogger<InterviewHub> _logger;
 
     // Track which connections have ended their session (thread-safe set)
     private static readonly ConcurrentDictionary<string, byte> _endedSessions = new();
 
-    public InterviewHub(IAiService aiService, ConversationStore store)
+    public InterviewHub(IAiService aiService, ConversationStore store, ILogger<InterviewHub> logger)
     {
         _aiService = aiService;
         _store = store;
+        _logger = logger;
     }
 
     public async Task ProcessUserAudio(UserInput input)
@@ -39,9 +41,19 @@ public class InterviewHub : Hub
         // Mark this connection as ended BEFORE awaiting feedback
         _endedSessions.TryAdd(connectionId, 0);
 
-        var feedback = await _aiService.GenerateFeedbackAsync(connectionId);
+        InterviewFeedback feedback;
+        try
+        {
+            feedback = await _aiService.GenerateFeedbackAsync(connectionId);
+        }
+        catch (Exception ex)
+        {
+            // Keep the history so the client can call EndSession again.
+            _logger.LogWarning(ex, "Report generation failed for {ConnectionId}", connectionId);
+            throw new HubException("Report generation failed. Try again.");
+        }
 
-        // Done with this session — drop its history
+        // Done with this session: drop its history
         _store.Reset(connectionId);
         return feedback;
     }
